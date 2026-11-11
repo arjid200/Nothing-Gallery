@@ -91,3 +91,11 @@ Future<void> openFavoritePage(BuildContext context) async {
         builder: (context) => const FavoritePage(),
       ));
 }
+
+Future<void> openTrashPage(BuildContext context) async {
+  await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const TrashPage(),
+      ));
+}

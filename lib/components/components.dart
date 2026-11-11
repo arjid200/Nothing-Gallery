@@ -7,3 +7,4 @@ export 'single_asset_bottom_menu.dart';
 export 'left_widget_button.dart';
 export 'dialog_bottom_button.dart';
 export 'exif_details_sheet.dart';
+export 'media_fast_scroller.dart';

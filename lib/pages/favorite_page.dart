@@ -22,12 +22,16 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
   late AlbumInfo recent;
   List<AssetEntity> assets = [];
   List<AssetEntity> images = [];
+  Map<DateTime, List<AssetEntity>> dateMap = {};
+  List<DateSection> sections = [];
+
+  final ScrollController _scrollController = ScrollController();
   StreamSubscription? eventSubscription;
 
-  int currentPage = 0;
   int startingIndex = 0;
   int totalLoaded = 0;
   int numCol = 4;
+  bool _isLoading = false;
 
   @override
   void setState(fn) {
@@ -52,20 +56,28 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
         switch (validateEventType(event)) {
           case EventType.assetDeleted:
           case EventType.favoriteRemoved:
+            final List<String> removedIds = (event.details is List)
+                ? (event.details as List).map((e) => e.toString()).toList()
+                : [];
+            removeIdsFromDateMap(dateMap, removedIds);
+            final rebuiltSections = buildDateSections(dateMap);
+
             setState(() {
-              assets.removeWhere((asset) =>
-                  (event.details as List<String>).contains(asset.id));
-              images.removeWhere((image) =>
-                  (event.details as List<String>).contains(image.id));
+              assets.removeWhere((asset) => removedIds.contains(asset.id));
+              sections = rebuiltSections;
+              images = collectOrderedImages(rebuiltSections);
             });
             break;
           case EventType.videoOpen:
             openVideoPlayerPage(context, event.details);
             break;
           case EventType.pictureOpen:
-            openImagePage(
-                context, images.indexOf(event.details), images.length, images,
-                favoritesPage: true);
+            final int idx = images.indexWhere(
+                (img) => img.id == (event.details as AssetEntity).id);
+            if (idx != -1) {
+              openImagePage(context, idx, images.length, images,
+                  favoritesPage: true);
+            }
             break;
           default:
         }
@@ -76,6 +88,7 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
   @override
   void dispose() {
     eventSubscription?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -93,51 +106,74 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
   Future<void> checkRemovedFavorites() async {
     final appStatus = Provider.of<AppStatus>(context, listen: false);
 
-    int currPage = 0;
-    List<String> currentAssetIds = [];
-    List<AssetEntity> newAssets = [];
+    int cursor = 0;
+    final Set<String> currentAssetIds = {};
+    List<AssetEntity> batch = [];
 
     do {
-      newAssets
-          .removeWhere((asset) => !appStatus.favoriteIds.contains(asset.id));
-      currentAssetIds = List.from(currentAssetIds)
-        ..addAll(newAssets.map((asset) => asset.id).toList());
-      newAssets = await loadAssets(recent.pathEntity, currPage++, size: 80);
-    } while (newAssets.isNotEmpty);
+      batch = await loadAssetsRange(recent.pathEntity, cursor, 500);
+      cursor += batch.length;
+      for (final asset in batch) {
+        if (appStatus.favoriteIds.contains(asset.id)) {
+          currentAssetIds.add(asset.id);
+        }
+      }
+    } while (batch.isNotEmpty);
 
-    List<String> removedIds = assets
-        .where((asset) {
-          bool remove = !currentAssetIds.contains(asset.id);
-          return remove;
-        })
+    final List<String> removedIds = assets
+        .where((asset) => !currentAssetIds.contains(asset.id))
         .map((asset) => asset.id)
         .toList();
 
     if (removedIds.isEmpty) return;
 
     appStatus.removeFavorite(removedIds);
+    removeIdsFromDateMap(dateMap, removedIds);
+    final rebuiltSections = buildDateSections(dateMap);
 
     setState(() {
       assets.removeWhere((favorites) => removedIds.contains(favorites.id));
-      images.removeWhere((favorites) => removedIds.contains(favorites.id));
+      sections = rebuiltSections;
+      images = collectOrderedImages(rebuiltSections);
     });
   }
 
   Future<void> getFavorites(AppStatus appStatus) async {
-    List<AssetEntity> newAssets = [];
+    if (_isLoading) return;
+    _isLoading = true;
 
-    while (totalLoaded < recent.assetCount) {
-      newAssets = await loadAssets(recent.pathEntity, currentPage++, size: 80);
-      if (newAssets.isEmpty) break;
-      totalLoaded += newAssets.length;
+    try {
+      int cursor = 0;
+      bool firstBatch = true;
 
-      newAssets
-          .removeWhere((asset) => !appStatus.favoriteIds.contains(asset.id));
+      while (totalLoaded < recent.assetCount) {
+        final int batchSize = firstBatch ? 100 : 500;
+        firstBatch = false;
 
-      assets = List.from(assets)..addAll(newAssets);
-      images = List.from(images)
-        ..addAll(newAssets.where((asset) => asset.type == AssetType.image));
-      setState(() {});
+        final List<AssetEntity> newAssets =
+            await loadAssetsRange(recent.pathEntity, cursor, batchSize);
+        if (newAssets.isEmpty) break;
+        cursor += newAssets.length;
+        totalLoaded += newAssets.length;
+
+        final List<AssetEntity> favBatch = newAssets
+            .where((asset) => appStatus.favoriteIds.contains(asset.id))
+            .toList();
+
+        if (favBatch.isNotEmpty) {
+          assets.addAll(favBatch);
+          addAssetsToDateMap(dateMap, favBatch);
+          final builtSections = buildDateSections(dateMap);
+          final orderedImages = collectOrderedImages(builtSections);
+
+          setState(() {
+            sections = builtSections;
+            images = orderedImages;
+          });
+        }
+      }
+    } finally {
+      _isLoading = false;
     }
   }
 
@@ -162,7 +198,7 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
     return Consumer<AppStatus>(builder: (context, appStatus, child) {
       if (appStatus.favoriteIds.isEmpty) {
         Future.microtask(() {
-          if (Navigator.canPop(context)) Navigator.pop(context);
+          if (mounted && Navigator.canPop(context)) Navigator.pop(context);
         });
         return Container();
       } else {
@@ -179,13 +215,16 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
                         if (Navigator.canPop(context)) Navigator.pop(context);
                       },
                       child: const Icon(Icons.arrow_back)),
-                  Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 20, 20, 20),
-                      child: Text(
-                        "FAVORITES (${appStatus.favoriteIds.length})",
-                        style: mainTextStyle(TextStyleType.gridPageTitle),
-                      )),
-                  const Spacer(),
+                  Expanded(
+                    child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 20, 12, 20),
+                        child: Text(
+                          "FAVORITES (${appStatus.favoriteIds.length})",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: mainTextStyle(TextStyleType.gridPageTitle),
+                        )),
+                  ),
                   imageSelection.selectionMode
                       ? SelectionMenu(
                           assets: assets,
@@ -195,34 +234,16 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
                       : Container()
                 ]),
 
-                // Images Grid
+                // Date-Grouped Favorites Grid with Fast Scroller
                 Expanded(
-                    child: RefreshIndicator(
-                        color: Colors.red,
-                        onRefresh: () async {
-                          await updateFavorites();
-                          return;
-                        },
-                        child: CustomScrollView(
-                          primary: false,
-                          slivers: <Widget>[
-                            SliverGrid.count(
-                                crossAxisSpacing: 2,
-                                mainAxisSpacing: 2,
-                                crossAxisCount: numCol,
-                                childAspectRatio: 1,
-                                children: assets
-                                    .asMap()
-                                    .entries
-                                    .map((entry) => GridItemWidget(
-                                          context: context,
-                                          asset: entry.value,
-                                          favoritePage: true,
-                                          thumbnailSelection: false,
-                                        ))
-                                    .toList()),
-                          ],
-                        )))
+                  child: DateGroupedMediaGrid(
+                    controller: _scrollController,
+                    sections: sections,
+                    crossAxisCount: numCol,
+                    onRefresh: updateFavorites,
+                    favoritePage: true,
+                  ),
+                ),
               ]));
         });
       }
@@ -230,19 +251,13 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
   }
 
   @override
-  void onDetached() {
-    // TODO: implement onDetached
-  }
+  void onDetached() {}
 
   @override
-  void onInactive() {
-    // TODO: implement onInactive
-  }
+  void onInactive() {}
 
   @override
-  void onPaused() {
-    // TODO: implement onPaused
-  }
+  void onPaused() {}
 
   @override
   void onResumed() async {
@@ -250,7 +265,5 @@ class _FavoriteState extends LifecycleListenerState<FavoritePage> {
   }
 
   @override
-  void onHidden() {
-    // TODO: implement onResumed
-  }
+  void onHidden() {}
 }

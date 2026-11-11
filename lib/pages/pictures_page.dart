@@ -27,30 +27,14 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
 
   Map<DateTime, List<AssetEntity>> dateMap = {};
   int totalCount = 0;
-  int currentPage = 0;
   int timelineColCount = 4;
   String activeFilter = 'ALL';
+  bool _isLoadingImages = false;
 
   int startingIndex = 0;
 
+  final ScrollController _scrollController = ScrollController();
   StreamSubscription? eventSubscription;
-
-  List<String> monthAbrev = [
-    "",
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-    "Jan"
-  ];
 
   @override
   void initState() {
@@ -68,23 +52,24 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
           eventController.stream.asBroadcastStream().listen((event) {
         switch (validateEventType(event)) {
           case EventType.assetDeleted:
-            List<AssetEntity> deletedAssets = assets
-                .where((image) =>
-                    (event.details as List<String>).contains(image.id))
+            final List<String> deletedIds = List<String>.from(event.details);
+            final List<AssetEntity> deletedAssets = assets
+                .where((image) => deletedIds.contains(image.id))
                 .toList();
 
-            for (AssetEntity asset in deletedAssets) {
-              removeAssetFromDateMap(asset);
+            removeIdsFromDateMap(dateMap, deletedIds);
+
+            if (mounted) {
+              setState(() {
+                assets.removeWhere((image) => deletedIds.contains(image.id));
+                images.removeWhere((image) => deletedIds.contains(image.id));
+                totalCount = (totalCount - deletedAssets.length)
+                    .clamp(0, 1 << 30);
+              });
             }
-
-            setState(() {
-              assets.removeWhere((image) =>
-                  (event.details as List<String>).contains(image.id));
-              images.removeWhere((image) =>
-                  (event.details as List<String>).contains(image.id));
-            });
-
-            totalCount -= 1;
+            break;
+          case EventType.assetMoved:
+            updateTimeline();
             break;
           case EventType.videoOpen:
             if (appStatus.activeTab == InitialScreen.timeline.tabIndex) {
@@ -93,8 +78,17 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
             break;
           case EventType.pictureOpen:
             if (appStatus.activeTab == InitialScreen.timeline.tabIndex) {
-              openImagePage(context, images.indexOf(event.details),
-                  images.length, images);
+              final sections = _computeSections(appStatus);
+              final orderedImages = collectOrderedImages(sections);
+              final int idx = orderedImages.indexWhere(
+                  (img) => img.id == (event.details as AssetEntity).id);
+              if (idx != -1) {
+                openImagePage(
+                    context, idx, orderedImages.length, orderedImages);
+              } else {
+                openImagePage(context, images.indexOf(event.details),
+                    images.length, images);
+              }
             }
             break;
           default:
@@ -106,107 +100,101 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
   @override
   void dispose() {
     eventSubscription?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  void removeAssetFromDateMap(AssetEntity asset) {
-    DateTime dateTaken = asset.createDateTime;
-    DateTime date = DateTime(dateTaken.year, dateTaken.month, dateTaken.day);
-    dateMap[date]?.removeWhere((element) => element.id == asset.id);
-    if (dateMap[date]!.isEmpty) {
-      dateMap.remove(date);
-    }
-  }
-
   Future<void> checkNewAssets() async {
-    AssetEntity lastLoaded = assets[0];
+    if (assets.isEmpty) {
+      await getImages();
+      return;
+    }
+
+    final AssetEntity lastLoaded = assets[0];
     List<AssetEntity> newAssets = [];
     int currPage = 0;
 
     while (newAssets.where((asset) => asset.id == lastLoaded.id).isEmpty) {
       if (newAssets.isNotEmpty) {
-        assets = List.from(newAssets)..addAll(assets);
-        images =
-            List.from(newAssets.where((asset) => asset.type == AssetType.image))
-              ..addAll(images);
-
-        await insertAssetToDateMap(newAssets);
-        setState(() {});
+        assets.insertAll(0, newAssets);
+        images.insertAll(
+            0, newAssets.where((asset) => asset.type == AssetType.image));
+        addAssetsToDateMap(dateMap, newAssets);
+        if (mounted) setState(() {});
       }
       newAssets = await loadAssets(recent.pathEntity, currPage++, size: 80);
+      if (newAssets.isEmpty) return;
     }
 
-    int prevLoc = newAssets.indexWhere((asset) => asset.id == lastLoaded.id);
+    final int prevLoc = newAssets.indexWhere((asset) => asset.id == lastLoaded.id);
     newAssets = newAssets.sublist(0, prevLoc);
-
-    print("found $prevLoc images added");
 
     if (newAssets.isEmpty) return;
 
-    assets = List.from(newAssets)..addAll(assets);
-    images =
-        List.from(newAssets.where((asset) => asset.type == AssetType.image))
-          ..addAll(images);
-
-    await insertAssetToDateMap(newAssets);
-    setState(() {});
+    assets.insertAll(0, newAssets);
+    images.insertAll(
+        0, newAssets.where((asset) => asset.type == AssetType.image));
+    addAssetsToDateMap(dateMap, newAssets);
     images.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
+    if (mounted) setState(() {});
   }
 
   Future<void> checkRemovedAssets() async {
-    int currPage = 0;
-    List<String> currentAssetIds = [];
-    List<AssetEntity> newAssets = [];
+    int cursor = 0;
+    final Set<String> currentAssetIds = {};
+    List<AssetEntity> batch = [];
 
     do {
-      newAssets = await loadAssets(recent.pathEntity, currPage++, size: 80);
-      currentAssetIds = List.from(currentAssetIds)
-        ..addAll(newAssets.map((asset) => asset.id).toList());
-    } while (newAssets.isNotEmpty);
+      batch = await loadAssetsRange(recent.pathEntity, cursor, 500);
+      cursor += batch.length;
+      for (final asset in batch) {
+        currentAssetIds.add(asset.id);
+      }
+    } while (batch.isNotEmpty);
 
-    List<String> removedIds = assets
-        .where((asset) {
-          bool remove = !currentAssetIds.contains(asset.id);
-          if (remove) removeAssetFromDateMap(asset);
-          return remove;
-        })
+    final List<String> removedIds = assets
+        .where((asset) => !currentAssetIds.contains(asset.id))
         .map((asset) => asset.id)
         .toList();
 
-    print("found ${removedIds.length} images removed");
-    setState(() {
-      assets.removeWhere((image) => removedIds.contains(image.id));
-      images.removeWhere((image) => removedIds.contains(image.id));
-    });
+    if (removedIds.isEmpty) return;
+
+    removeIdsFromDateMap(dateMap, removedIds);
+    if (mounted) {
+      setState(() {
+        assets.removeWhere((image) => removedIds.contains(image.id));
+        images.removeWhere((image) => removedIds.contains(image.id));
+      });
+    }
   }
 
   Future<void> getImages() async {
-    List<AssetEntity> newAssets = [];
+    if (_isLoadingImages) return;
+    _isLoadingImages = true;
 
-    while (assets.length < recent.assetCount) {
-      newAssets = await loadAssets(recent.pathEntity, currentPage++, size: 80);
-      if (newAssets.isEmpty) break;
+    try {
+      int cursor = 0;
+      bool firstBatch = true;
 
-      assets = List.from(assets)..addAll(newAssets);
-      images = List.from(images)
-        ..addAll(newAssets.where((asset) => asset.type == AssetType.image));
-      await insertAssetToDateMap(newAssets);
-      setState(() {});
-    }
-    images.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
-  }
+      while (assets.length < recent.assetCount) {
+        final int batchSize = firstBatch ? 100 : 500;
+        firstBatch = false;
 
-  Future<void> insertAssetToDateMap(List<AssetEntity> newAssets) async {
-    for (AssetEntity asset in newAssets) {
-      DateTime dateTaken = asset.createDateTime;
-      DateTime date = DateTime(dateTaken.year, dateTaken.month, dateTaken.day);
+        final List<AssetEntity> newAssets =
+            await loadAssetsRange(recent.pathEntity, cursor, batchSize);
+        if (newAssets.isEmpty) break;
+        cursor += newAssets.length;
 
-      dateMap.putIfAbsent(date, () => []);
-      dateMap[date]!.add(asset);
-      if (dateMap[date]!.isNotEmpty) {
-        dateMap[date]!
-            .sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
+        assets.addAll(newAssets);
+        images.addAll(
+            newAssets.where((asset) => asset.type == AssetType.image));
+        addAssetsToDateMap(dateMap, newAssets);
+
+        if (mounted) setState(() {});
       }
+      images.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
+    } finally {
+      _isLoadingImages = false;
     }
   }
 
@@ -221,6 +209,20 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
 
     await checkRemovedAssets();
     await checkNewAssets();
+  }
+
+  List<DateSection> _computeSections(AppStatus appStatus) {
+    bool Function(AssetEntity)? predicate;
+    if (activeFilter == 'PHOTOS') {
+      predicate = (a) => a.type == AssetType.image;
+    } else if (activeFilter == 'VIDEOS') {
+      predicate = (a) => a.type == AssetType.video;
+    } else if (activeFilter == 'SCREENSHOTS') {
+      predicate = (a) => (a.title ?? '').toLowerCase().contains('screenshot');
+    } else if (activeFilter == 'FAVORITES') {
+      predicate = (a) => appStatus.isFavorite(a.id);
+    }
+    return buildDateSections(dateMap, filter: predicate);
   }
 
   Widget picturesPageWrapper(ImageSelection imageSelection, Widget child) {
@@ -239,7 +241,7 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
   }
 
   Widget _buildFilterPills(AppStatus appStatus) {
-    final filters = ['ALL', 'PHOTOS', 'VIDEOS', 'SCREENSHOTS', 'FAVORITES'];
+    const filters = ['ALL', 'PHOTOS', 'VIDEOS', 'SCREENSHOTS', 'FAVORITES'];
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -249,7 +251,14 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
           return Padding(
             padding: const EdgeInsets.only(right: 8),
             child: GestureDetector(
-              onTap: () => setState(() => activeFilter = filter),
+              onTap: () {
+                if (activeFilter != filter) {
+                  setState(() => activeFilter = filter);
+                  if (_scrollController.hasClients) {
+                    _scrollController.jumpTo(0);
+                  }
+                }
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 padding:
@@ -281,74 +290,13 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
     );
   }
 
-  Widget _buildDateChunk(BuildContext context,
-      MapEntry<DateTime, List<AssetEntity>> entry, List<AssetEntity> filteredAssets) {
-    if (filteredAssets.isEmpty) return const SizedBox.shrink();
-
-    String dateText = entry.key.year == DateTime.now().year
-        ? "${monthAbrev[entry.key.month]} ${entry.key.day}"
-        : "${entry.key.year} ${monthAbrev[entry.key.month]} ${entry.key.day}";
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
-          child: Text(
-            dateText,
-            style: mainTextStyle(TextStyleType.picturesDateTaken),
-          ),
-        ),
-        GridView.count(
-            padding: const EdgeInsets.fromLTRB(0, 10, 0, 10),
-            primary: false,
-            crossAxisSpacing: 2,
-            mainAxisSpacing: 2,
-            shrinkWrap: true,
-            crossAxisCount: timelineColCount,
-            children: filteredAssets.map((asset) {
-              return GridItemWidget(
-                context: context,
-                asset: asset,
-                favoritePage: false,
-                thumbnailSelection: false,
-              );
-            }).toList())
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     super.build(context);
 
     return Consumer2<ImageSelection, AppStatus>(
         builder: (context, imageSelection, appStatus, child) {
-      // Filter assets per date according to active filter
-      var dateList = dateMap.entries.map((entry) {
-        List<AssetEntity> filteredList = entry.value;
-        if (activeFilter == 'PHOTOS') {
-          filteredList = entry.value
-              .where((a) => a.type == AssetType.image)
-              .toList();
-        } else if (activeFilter == 'VIDEOS') {
-          filteredList = entry.value
-              .where((a) => a.type == AssetType.video)
-              .toList();
-        } else if (activeFilter == 'SCREENSHOTS') {
-          filteredList = entry.value
-              .where((a) =>
-                  (a.title ?? '').toLowerCase().contains('screenshot'))
-              .toList();
-        } else if (activeFilter == 'FAVORITES') {
-          filteredList = entry.value
-              .where((a) => appStatus.isFavorite(a.id))
-              .toList();
-        }
-        return MapEntry(entry.key, filteredList);
-      }).where((entry) => entry.value.isNotEmpty).toList();
-
-      dateList.sort((a, b) => b.key.compareTo(a.key));
+      final List<DateSection> sections = _computeSections(appStatus);
 
       return picturesPageWrapper(
           imageSelection,
@@ -396,50 +344,41 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
                   ],
                 )),
             _buildFilterPills(appStatus),
-            // Timeline Grid
             Expanded(
-                child: RefreshIndicator(
-              color: Colors.red,
-              onRefresh: () async {
-                await updateTimeline();
-                return;
-              },
-              child: CustomScrollView(primary: false, slivers: <Widget>[
-                SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                  (context, index) => _buildDateChunk(
-                      context, dateList[index], dateList[index].value),
-                  childCount: dateList.length,
-                ))
-              ]),
-            ))
+              child: DateGroupedMediaGrid(
+                controller: _scrollController,
+                sections: sections,
+                crossAxisCount: timelineColCount,
+                onRefresh: updateTimeline,
+                emptyState: activeFilter != 'ALL'
+                    ? Center(
+                        child: Text(
+                          'NO $activeFilter FOUND',
+                          style: mainTextStyle(TextStyleType.gridPageTitle)
+                              .copyWith(color: Colors.white38),
+                        ),
+                      )
+                    : null,
+              ),
+            ),
           ]));
     });
   }
 
   @override
-  // TODO: implement wantKeepAlive
   bool get wantKeepAlive => true;
 
   @override
-  void onDetached() {
-    // TODO: implement onDetached
-  }
+  void onDetached() {}
 
   @override
-  void onHidden() {
-    // TODO: implement onHidden
-  }
+  void onHidden() {}
 
   @override
-  void onInactive() {
-    // TODO: implement onInactive
-  }
+  void onInactive() {}
 
   @override
-  void onPaused() {
-    // TODO: implement onPaused
-  }
+  void onPaused() {}
 
   @override
   void onResumed() async {

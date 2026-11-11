@@ -12,6 +12,11 @@ Future<List<AssetEntity>> loadAssets(AssetPathEntity album, int page,
   return images;
 }
 
+Future<List<AssetEntity>> loadAssetsRange(
+    AssetPathEntity album, int start, int count) async {
+  return await album.getAssetListRange(start: start, end: start + count);
+}
+
 Future<List<AlbumInfo>> getCurrentAlbumStates(List<String> ids) async {
   List<AlbumInfo> albums = [];
 

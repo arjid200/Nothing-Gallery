@@ -27,12 +27,15 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
   late AlbumInfo albumInfo;
   List<AssetEntity> images = [];
   List<AssetEntity> assets = [];
+  Map<DateTime, List<AssetEntity>> dateMap = {};
+  List<DateSection> sections = [];
   StreamSubscription? eventSubscription;
+  final ScrollController _scrollController = ScrollController();
 
   int totalCount = 0;
-  int currentPage = 0;
   int numCol = 4;
   bool useTrashBin = true;
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -51,21 +54,36 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
       switch (validateEventType(event)) {
         case EventType.assetDeleted:
         case EventType.assetMoved:
-          setState(() {
-            assets.removeWhere(
-                (image) => (event.details as List<String>).contains(image.id));
-            images.removeWhere(
-                (image) => (event.details as List<String>).contains(image.id));
-            totalCount -= (event.details as List<String>).length;
-          });
+          final List<String> changedIds = (event.details is List)
+              ? (event.details as List).map((e) => e.toString()).toList()
+              : [];
 
+          if (changedIds.isEmpty) {
+            updateGrid();
+            return;
+          }
+
+          removeIdsFromDateMap(dateMap, changedIds);
+          final rebuiltSections = buildDateSections(dateMap);
+
+          if (mounted) {
+            setState(() {
+              assets.removeWhere((image) => changedIds.contains(image.id));
+              sections = rebuiltSections;
+              images = collectOrderedImages(rebuiltSections);
+              totalCount = (totalCount - changedIds.length).clamp(0, 1 << 30);
+            });
+          }
           break;
         case EventType.videoOpen:
           openVideoPlayerPage(context, event.details);
           break;
         case EventType.pictureOpen:
-          openImagePage(
-              context, images.indexOf(event.details), images.length, images);
+          final int idx = images
+              .indexWhere((img) => img.id == (event.details as AssetEntity).id);
+          if (idx != -1) {
+            openImagePage(context, idx, images.length, images);
+          }
           break;
         default:
       }
@@ -75,6 +93,7 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
   @override
   void dispose() {
     eventSubscription?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -82,14 +101,19 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
     List<AlbumInfo> updatedAlbum =
         await getCurrentAlbumStates([albumInfo.pathEntity.id]);
 
-    if (updatedAlbum.isEmpty) return;
+    if (updatedAlbum.isEmpty) {
+      if (mounted) {
+        setState(() => totalCount = 0);
+      }
+      return;
+    }
     albumInfo = updatedAlbum[0];
+    totalCount = albumInfo.assetCount;
     await refreshGrid();
   }
 
   Future<void> refreshGrid() async {
-    currentPage = 0;
-    await getImages();
+    await getImages(clearFirst: assets.isEmpty);
   }
 
   void getPreferences() {
@@ -97,25 +121,65 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
     useTrashBin = sharedPref.get(SharedPrefKeys.useTrashBin);
   }
 
-  Future<void> getImages() async {
-    assets.clear();
-    images.clear();
+  Future<void> getImages({bool clearFirst = true}) async {
+    if (_isLoading) return;
+    _isLoading = true;
 
-    List<AssetEntity> newAssets = [];
-    while (assets.length < albumInfo.assetCount) {
-      newAssets =
-          await loadAssets(albumInfo.pathEntity, currentPage++, size: 80);
-      if (newAssets.isEmpty) break;
+    try {
+      final List<AssetEntity> nextAssets = [];
+      final Map<DateTime, List<AssetEntity>> nextDateMap = {};
 
-      assets = List.from(assets)..addAll(newAssets);
-      assets.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
+      if (clearFirst) {
+        assets.clear();
+        images.clear();
+        dateMap.clear();
+        sections = [];
+      }
 
-      images = List.from(images)
-        ..addAll(newAssets.where((asset) => asset.type == AssetType.image));
+      int cursor = 0;
+      bool firstBatch = true;
+      final int targetCount = albumInfo.assetCount;
 
-      if (mounted) setState(() {});
+      while (cursor < targetCount) {
+        final int batchSize = firstBatch ? 100 : 500;
+        firstBatch = false;
+
+        final List<AssetEntity> newAssets =
+            await loadAssetsRange(albumInfo.pathEntity, cursor, batchSize);
+        if (newAssets.isEmpty) break;
+        cursor += newAssets.length;
+
+        nextAssets.addAll(newAssets);
+        addAssetsToDateMap(nextDateMap, newAssets);
+
+        if (clearFirst && mounted) {
+          final List<DateSection> builtSections =
+              buildDateSections(nextDateMap);
+          final List<AssetEntity> orderedImages =
+              collectOrderedImages(builtSections);
+          setState(() {
+            assets = List.from(nextAssets);
+            dateMap = nextDateMap;
+            sections = builtSections;
+            images = orderedImages;
+          });
+        }
+      }
+
+      if (mounted && (!clearFirst || nextAssets.isEmpty)) {
+        final List<DateSection> builtSections = buildDateSections(nextDateMap);
+        final List<AssetEntity> orderedImages =
+            collectOrderedImages(builtSections);
+        setState(() {
+          assets = nextAssets;
+          dateMap = nextDateMap;
+          sections = builtSections;
+          images = orderedImages;
+        });
+      }
+    } finally {
+      _isLoading = false;
     }
-    images.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
   }
 
   Widget gridPageWrapper(Widget child) {
@@ -142,7 +206,9 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
   @override
   Widget build(BuildContext context) {
     if (totalCount == 0) {
-      Future.microtask(() => Navigator.pop(context));
+      Future.microtask(() {
+        if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      });
       return Container();
     } else {
       return gridPageWrapper(Stack(
@@ -156,15 +222,18 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
                     if (Navigator.canPop(context)) Navigator.pop(context);
                   },
                   child: const Icon(Icons.arrow_back)),
-              Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 20, 20, 20),
-                  child: Text(
-                    widget.selectImage
-                        ? 'CHOOSE THUMBNAIL'
-                        : "${albumInfo.pathEntity.name.toUpperCase()} ($totalCount)",
-                    style: mainTextStyle(TextStyleType.gridPageTitle),
-                  )),
-              const Spacer(),
+              Expanded(
+                child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 20, 12, 20),
+                    child: Text(
+                      widget.selectImage
+                          ? 'CHOOSE THUMBNAIL'
+                          : "${albumInfo.pathEntity.name.toUpperCase()} ($totalCount)",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: mainTextStyle(TextStyleType.gridPageTitle),
+                    )),
+              ),
               Consumer<ImageSelection>(
                   builder: (context, imageSelection, child) {
                 if (imageSelection.selectionMode) {
@@ -174,38 +243,48 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
                     currentAlbum: albumInfo.pathEntity,
                   );
                 }
-                return Container();
+                if (!widget.selectImage) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton(
+                      icon: Icon(
+                        numCol == 4
+                            ? Icons.grid_view_rounded
+                            : numCol == 3
+                                ? Icons.view_comfy_alt_outlined
+                                : Icons.view_column_outlined,
+                        size: 20,
+                        color: Colors.white70,
+                      ),
+                      tooltip: "Grid columns: $numCol",
+                      onPressed: () {
+                        setState(() {
+                          if (numCol >= 4) {
+                            numCol = 3;
+                          } else if (numCol == 3) {
+                            numCol = 2;
+                          } else {
+                            numCol = 4;
+                          }
+                        });
+                      },
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
               })
             ]),
 
-            // Images Grid
+            // Date-Sorted Virtualized Album Grid with Google Photos Fast Scroller
             Expanded(
-                child: RefreshIndicator(
-                    color: Colors.red,
-                    onRefresh: () async {
-                      await updateGrid();
-                      return;
-                    },
-                    child: CustomScrollView(
-                      primary: false,
-                      slivers: <Widget>[
-                        SliverGrid.count(
-                            crossAxisSpacing: 2,
-                            mainAxisSpacing: 2,
-                            crossAxisCount: numCol,
-                            childAspectRatio: 1,
-                            children: assets
-                                .asMap()
-                                .entries
-                                .map((entry) => GridItemWidget(
-                                      context: context,
-                                      asset: entry.value,
-                                      favoritePage: false,
-                                      thumbnailSelection: widget.selectImage,
-                                    ))
-                                .toList()),
-                      ],
-                    )))
+              child: DateGroupedMediaGrid(
+                controller: _scrollController,
+                sections: sections,
+                crossAxisCount: numCol,
+                onRefresh: updateGrid,
+                thumbnailSelection: widget.selectImage,
+              ),
+            ),
           ]),
           Consumer<AppStatus>(builder: (context, appStatus, child) {
             if (appStatus.loading) {
@@ -229,19 +308,13 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
   }
 
   @override
-  void onDetached() {
-    // TODO: implement onDetached
-  }
+  void onDetached() {}
 
   @override
-  void onInactive() {
-    // TODO: implement onInactive
-  }
+  void onInactive() {}
 
   @override
-  void onPaused() {
-    // TODO: implement onPaused
-  }
+  void onPaused() {}
 
   @override
   void onResumed() async {
@@ -249,7 +322,5 @@ class _ImageGridState extends LifecycleListenerState<ImageGridWidget> {
   }
 
   @override
-  void onHidden() {
-    // TODO: implement onResumed
-  }
+  void onHidden() {}
 }

@@ -24,27 +24,11 @@ class _VideosPageState extends LifecycleListenerState<VideosPage> {
   List<AssetEntity> assets = [];
 
   Map<DateTime, List<AssetEntity>> dateMap = {};
-  int currentPage = 0;
   int totalLoaded = 0;
+  bool _isLoading = false;
 
+  final ScrollController _scrollController = ScrollController();
   StreamSubscription? eventSubscription;
-
-  List<String> monthAbrev = [
-    "",
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-    "Jan"
-  ];
 
   @override
   void initState() {
@@ -62,26 +46,16 @@ class _VideosPageState extends LifecycleListenerState<VideosPage> {
           eventController.stream.asBroadcastStream().listen((event) {
         switch (validateEventType(event)) {
           case EventType.assetDeleted:
-            List<AssetEntity> deletedAssets = assets
-                .where((image) =>
-                    (event.details as List<String>).contains(image.id))
-                .toList();
+            final List<String> deletedIds = (event.details is List)
+                ? (event.details as List).map((e) => e.toString()).toList()
+                : [];
+            removeIdsFromDateMap(dateMap, deletedIds);
 
-            for (AssetEntity asset in deletedAssets) {
-              DateTime dateTaken = asset.createDateTime;
-              DateTime date =
-                  DateTime(dateTaken.year, dateTaken.month, dateTaken.day);
-              dateMap[date]?.removeWhere((element) => element.id == asset.id);
-              if (dateMap[date]!.isEmpty) {
-                dateMap.remove(date);
-              }
+            if (mounted) {
+              setState(() {
+                assets.removeWhere((image) => deletedIds.contains(image.id));
+              });
             }
-
-            setState(() {
-              assets.removeWhere((image) =>
-                  (event.details as List<String>).contains(image.id));
-            });
-
             break;
           case EventType.videoOpen:
             openVideoPlayerPage(context, event.details);
@@ -95,74 +69,68 @@ class _VideosPageState extends LifecycleListenerState<VideosPage> {
   @override
   void dispose() {
     eventSubscription?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  void removeAssetFromDateMap(AssetEntity asset) {
-    DateTime dateTaken = asset.createDateTime;
-    DateTime date = DateTime(dateTaken.year, dateTaken.month, dateTaken.day);
-    dateMap[date]?.removeWhere((element) => element.id == asset.id);
-    if (dateMap[date]!.isEmpty) {
-      dateMap.remove(date);
-    }
-  }
-
   Future<void> checkNewVideos() async {
-    AssetEntity lastLoaded = assets[0];
-    List<AssetEntity> newAssets = [];
+    if (assets.isEmpty) {
+      await getVideos();
+      return;
+    }
 
+    final AssetEntity lastLoaded = assets[0];
+    List<AssetEntity> newAssets = [];
     int currPage = 0;
 
     while (newAssets.where((asset) => asset.id == lastLoaded.id).isEmpty) {
       if (newAssets.isNotEmpty) {
-        assets = List.from(newAssets)..addAll(assets);
-        await insertAssetToDateMap(newAssets);
-        setState(() {});
+        assets.insertAll(0, newAssets);
+        addAssetsToDateMap(dateMap, newAssets);
+        if (mounted) setState(() {});
       }
       newAssets = await loadAssets(recent.pathEntity, currPage++, size: 80);
+      if (newAssets.isEmpty) return;
       newAssets.removeWhere((asset) => asset.type != AssetType.video);
     }
-    newAssets.removeWhere((asset) => asset.type != AssetType.video);
-    int prevLoc = newAssets.indexWhere((asset) => asset.id == lastLoaded.id);
-    newAssets = newAssets.sublist(0, prevLoc);
 
-    print("found $prevLoc images added");
-
-    if (newAssets.isEmpty) return;
-
-    assets = List.from(newAssets)..addAll(assets);
-
-    await insertAssetToDateMap(newAssets);
-    setState(() {});
+    final int prevLoc = newAssets.indexWhere((asset) => asset.id == lastLoaded.id);
+    if (prevLoc > 0) {
+      newAssets = newAssets.sublist(0, prevLoc);
+      assets.insertAll(0, newAssets);
+      addAssetsToDateMap(dateMap, newAssets);
+      if (mounted) setState(() {});
+    }
   }
 
   Future<void> checkRemovedVideos() async {
-    int currPage = 0;
-    List<String> currentAssetIds = [];
-    List<AssetEntity> newAssets = [];
+    int cursor = 0;
+    final Set<String> currentAssetIds = {};
+    List<AssetEntity> batch = [];
 
     do {
-      newAssets.removeWhere((asset) => asset.type != AssetType.video);
+      batch = await loadAssetsRange(recent.pathEntity, cursor, 500);
+      cursor += batch.length;
+      for (final asset in batch) {
+        if (asset.type == AssetType.video) {
+          currentAssetIds.add(asset.id);
+        }
+      }
+    } while (batch.isNotEmpty);
 
-      currentAssetIds = List.from(currentAssetIds)
-        ..addAll(newAssets.map((asset) => asset.id).toList());
-      newAssets = await loadAssets(recent.pathEntity, currPage++, size: 80);
-    } while (newAssets.isNotEmpty);
-
-    List<String> removedIds = assets
-        .where((asset) {
-          bool remove = !currentAssetIds.contains(asset.id);
-          if (remove) removeAssetFromDateMap(asset);
-          return remove;
-        })
+    final List<String> removedIds = assets
+        .where((asset) => !currentAssetIds.contains(asset.id))
         .map((asset) => asset.id)
         .toList();
 
-    print("found ${removedIds.length} images removed");
+    if (removedIds.isEmpty) return;
+    removeIdsFromDateMap(dateMap, removedIds);
 
-    setState(() {
-      assets.removeWhere((video) => removedIds.contains(video.id));
-    });
+    if (mounted) {
+      setState(() {
+        assets.removeWhere((video) => removedIds.contains(video.id));
+      });
+    }
   }
 
   Future<void> updateVideos() async {
@@ -178,34 +146,35 @@ class _VideosPageState extends LifecycleListenerState<VideosPage> {
   }
 
   Future<void> getVideos() async {
-    List<AssetEntity> newAssets = [];
+    if (_isLoading) return;
+    _isLoading = true;
 
-    while (totalLoaded < recent.assetCount) {
-      newAssets = await loadAssets(recent.pathEntity, currentPage++, size: 80);
-      if (newAssets.isEmpty) break;
+    try {
+      int cursor = 0;
+      bool firstBatch = true;
 
-      totalLoaded += newAssets.length;
-      newAssets.removeWhere((asset) => asset.type != AssetType.video);
+      while (totalLoaded < recent.assetCount) {
+        final int batchSize = firstBatch ? 100 : 500;
+        firstBatch = false;
 
-      if (newAssets.isNotEmpty) {
-        assets = List.from(assets)..addAll(newAssets);
-        await insertAssetToDateMap(newAssets);
-        setState(() {});
+        final List<AssetEntity> newAssets =
+            await loadAssetsRange(recent.pathEntity, cursor, batchSize);
+        if (newAssets.isEmpty) break;
+        cursor += newAssets.length;
+        totalLoaded += newAssets.length;
+
+        final List<AssetEntity> videos = newAssets
+            .where((asset) => asset.type == AssetType.video)
+            .toList();
+
+        if (videos.isNotEmpty) {
+          assets.addAll(videos);
+          addAssetsToDateMap(dateMap, videos);
+          if (mounted) setState(() {});
+        }
       }
-    }
-  }
-
-  Future<void> insertAssetToDateMap(List<AssetEntity> newAssets) async {
-    for (AssetEntity asset in newAssets) {
-      DateTime dateTaken = asset.createDateTime;
-      DateTime date = DateTime(dateTaken.year, dateTaken.month, dateTaken.day);
-
-      dateMap.putIfAbsent(date, () => []);
-      dateMap[date]!.add(asset);
-      if (dateMap[date]!.isNotEmpty) {
-        dateMap[date]!
-            .sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
-      }
+    } finally {
+      _isLoading = false;
     }
   }
 
@@ -224,45 +193,9 @@ class _VideosPageState extends LifecycleListenerState<VideosPage> {
                 child: SafeArea(child: child))));
   }
 
-  Widget _buildDateChunk(
-      BuildContext context, MapEntry<DateTime, List<AssetEntity>> entry) {
-    String dateText = entry.key.year == DateTime.now().year
-        ? "${monthAbrev[entry.key.month]} ${entry.key.day}"
-        : "${entry.key.year} ${monthAbrev[entry.key.month]} ${entry.key.day}";
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
-          child: Text(
-            dateText,
-            style: mainTextStyle(TextStyleType.picturesDateTaken),
-          ),
-        ),
-        GridView.count(
-            padding: const EdgeInsets.fromLTRB(0, 10, 0, 10),
-            primary: false,
-            crossAxisSpacing: 3,
-            mainAxisSpacing: 3,
-            shrinkWrap: true,
-            crossAxisCount: 4,
-            children: entry.value.map((entry) {
-              return GridItemWidget(
-                context: context,
-                asset: entry,
-                favoritePage: false,
-                thumbnailSelection: false,
-              );
-            }).toList())
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    var dateList = dateMap.entries.toList();
-    dateList.sort((a, b) => b.key.compareTo(a.key));
+    final List<DateSection> sections = buildDateSections(dateMap);
 
     return Consumer<ImageSelection>(builder: (context, imageSelection, child) {
       return videosPageWrapper(
@@ -292,45 +225,29 @@ class _VideosPageState extends LifecycleListenerState<VideosPage> {
                         : Container()
                   ],
                 )),
-            // Album Grid
             Expanded(
-                child: RefreshIndicator(
-              color: Colors.red,
-              onRefresh: () async {
-                await updateVideos();
-                return;
-              },
-              child: CustomScrollView(primary: false, slivers: <Widget>[
-                SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                  (context, index) => _buildDateChunk(context, dateList[index]),
-                  childCount: dateList.length,
-                ))
-              ]),
-            )),
+              child: DateGroupedMediaGrid(
+                controller: _scrollController,
+                sections: sections,
+                crossAxisCount: 4,
+                onRefresh: updateVideos,
+              ),
+            ),
           ]));
     });
   }
 
   @override
-  void onDetached() {
-    // TODO: implement onDetached
-  }
+  void onDetached() {}
 
   @override
-  void onHidden() {
-    // TODO: implement onHidden
-  }
+  void onHidden() {}
 
   @override
-  void onInactive() {
-    // TODO: implement onInactive
-  }
+  void onInactive() {}
 
   @override
-  void onPaused() {
-    // TODO: implement onPaused
-  }
+  void onPaused() {}
 
   @override
   void onResumed() async {

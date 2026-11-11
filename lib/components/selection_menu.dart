@@ -277,6 +277,54 @@ class _SelectionMenuState extends State<SelectionMenu>
                     case SelectedImageMenu.moveTo:
                       copyMoveAssetsPanel(context, false, selectedAssets);
                       break;
+                    case SelectedImageMenu.lock:
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          backgroundColor:
+                              const Color.fromRGBO(24, 28, 30, 1),
+                          title: Text(
+                            "LOCK MEDIA",
+                            style: mainTextStyle(TextStyleType.alertTitle),
+                          ),
+                          content: Text(
+                            "Move ${selectedAssets.length} item(s) to the Locked Folder? They will be hidden from the gallery.",
+                            style: mainTextStyle(
+                                TextStyleType.settingsPageDescription),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx),
+                              child: Text("CANCEL",
+                                  style: mainTextStyle(TextStyleType.buttonText)),
+                            ),
+                            TextButton(
+                              onPressed: () async {
+                                Navigator.pop(ctx);
+                                List<String> lockedIds = [];
+                                for (var asset in selectedAssets) {
+                                  final ok =
+                                      await LockedManager.moveToLocked(asset);
+                                  if (ok) lockedIds.add(asset.id);
+                                }
+                                imageSelection.endSelection();
+                                if (lockedIds.isNotEmpty) {
+                                  eventController.sink.add(Event(
+                                      EventType.assetDeleted, lockedIds));
+                                  Fluttertoast.showToast(
+                                      msg: "Moved to Locked Folder");
+                                }
+                              },
+                              child: Text(
+                                "LOCK",
+                                style: mainTextStyle(TextStyleType.buttonText)
+                                    .copyWith(color: Colors.redAccent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                      break;
                     default:
                   }
                 },

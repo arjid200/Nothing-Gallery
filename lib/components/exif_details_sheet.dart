@@ -26,8 +26,9 @@ void showExifDetailsSheet(BuildContext context, AssetEntity asset) async {
   String formattedDate =
       DateFormat('EEEE, MMM d, yyyy • h:mm a').format(asset.createDateTime);
 
-  final latLong = await asset.latLong();
-  final bool hasGps = latLong.latitude != 0.0 || latLong.longitude != 0.0;
+  final double lat = asset.latitude;
+  final double lng = asset.longitude;
+  final bool hasGps = lat != 0.0 || lng != 0.0;
 
   if (!context.mounted) return;
 
@@ -114,14 +115,14 @@ void showExifDetailsSheet(BuildContext context, AssetEntity asset) async {
                 icon: Icons.location_on_outlined,
                 title: "LOCATION",
                 value:
-                    "${latLong.latitude.toStringAsFixed(4)}°, ${latLong.longitude.toStringAsFixed(4)}°",
+                    "${lat.toStringAsFixed(4)}°, ${lng.toStringAsFixed(4)}°",
               ),
               const SizedBox(height: 8),
               Center(
                 child: TextButton.icon(
                   onPressed: () async {
                     final uri = Uri.parse(
-                        "geo:${latLong.latitude},${latLong.longitude}?q=${latLong.latitude},${latLong.longitude}");
+                        "geo:$lat,$lng?q=$lat,$lng");
                     if (await canLaunchUrl(uri)) {
                       await launchUrl(uri);
                     }

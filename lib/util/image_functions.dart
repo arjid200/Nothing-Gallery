@@ -77,13 +77,8 @@ Future<List<String>> confirmDelete(
 
   if (result.isEmpty) {
     // If the user cancelled system deletion dialog, clean up staged backups
-    final trashed = await TrashManager.getTrashedItems();
-    for (var entity in deleteEntityList) {
-      final matches = trashed.where((t) => t.id == entity.id).toList();
-      for (var m in matches) {
-        await TrashManager.permanentlyDelete(m);
-      }
-    }
+    await TrashManager.cleanUpStagedTrash(
+        deleteEntityList.map((e) => e.id).toList());
     return [];
   } else {
     eventController.sink.add(Event(EventType.assetDeleted, result));

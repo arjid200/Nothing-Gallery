@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -42,6 +43,8 @@ class LockedItem {
 }
 
 class LockedManager {
+  static const MethodChannel _nativeChannel =
+      MethodChannel('com.kahluabear.nothing_gallery/native_trash');
   static const String manifestFileName = 'locked_manifest.json';
   static const String pinPrefKey = 'user_locked_pin_code';
 
@@ -162,10 +165,6 @@ class LockedManager {
       String destPath = item.originalPath;
       File destFile = File(destPath);
       if (!await destFile.parent.exists()) {
-        final extDir = await getExternalStorageDirectory();
-        destPath =
-            '${extDir?.path ?? file.parent.path}/Restored/${item.filename}';
-        destFile = File(destPath);
         await destFile.parent.create(recursive: true);
       }
 
@@ -173,18 +172,7 @@ class LockedManager {
       await file.delete();
 
       try {
-        if (item.isVideo) {
-          await PhotoManager.editor.saveVideo(
-            destFile,
-            title: item.filename,
-          );
-        } else {
-          final bytes = await destFile.readAsBytes();
-          await PhotoManager.editor.saveImage(
-            bytes,
-            title: item.filename,
-          );
-        }
+        await _nativeChannel.invokeMethod('scanFile', {'path': destPath});
       } catch (e) {
         debugPrint('Media scan warning on unlock: $e');
       }

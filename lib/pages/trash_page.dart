@@ -55,16 +55,14 @@ class _TrashPageState extends State<TrashPage> {
         trashedItems.where((i) => selectedIds.contains(i.id)).toList();
     if (targets.isEmpty) return;
 
-    int restoredCount = 0;
-    for (final item in targets) {
-      final success = await TrashManager.restoreItem(item);
-      if (success) restoredCount++;
+    final success = await TrashManager.restoreMultipleItems(targets);
+    if (success) {
+      Fluttertoast.showToast(
+        msg: "Restored ${targets.length} item(s)",
+        toastLength: Toast.LENGTH_SHORT,
+      );
+      eventController.sink.add(Event(EventType.assetMoved, []));
     }
-
-    Fluttertoast.showToast(
-      msg: "Restored $restoredCount item(s)",
-      toastLength: Toast.LENGTH_SHORT,
-    );
     await loadTrash();
   }
 
@@ -104,13 +102,13 @@ class _TrashPageState extends State<TrashPage> {
     if (confirmed == true) {
       final targets =
           trashedItems.where((i) => selectedIds.contains(i.id)).toList();
-      for (final item in targets) {
-        await TrashManager.permanentlyDelete(item);
+      final success = await TrashManager.permanentlyDeleteMultiple(targets);
+      if (success) {
+        Fluttertoast.showToast(
+          msg: "Deleted permanently",
+          toastLength: Toast.LENGTH_SHORT,
+        );
       }
-      Fluttertoast.showToast(
-        msg: "Deleted permanently",
-        toastLength: Toast.LENGTH_SHORT,
-      );
       await loadTrash();
     }
   }
@@ -196,9 +194,12 @@ class _TrashPageState extends State<TrashPage> {
                 TextButton.icon(
                   onPressed: () async {
                     Navigator.pop(ctx);
-                    final success = await TrashManager.restoreItem(item);
+                    final success =
+                        await TrashManager.restoreMultipleItems([item]);
                     if (success) {
                       Fluttertoast.showToast(msg: "Restored");
+                      eventController.sink
+                          .add(Event(EventType.assetMoved, []));
                       loadTrash();
                     }
                   },
@@ -209,8 +210,11 @@ class _TrashPageState extends State<TrashPage> {
                 TextButton.icon(
                   onPressed: () async {
                     Navigator.pop(ctx);
-                    await TrashManager.permanentlyDelete(item);
-                    Fluttertoast.showToast(msg: "Deleted permanently");
+                    final success =
+                        await TrashManager.permanentlyDeleteMultiple([item]);
+                    if (success) {
+                      Fluttertoast.showToast(msg: "Deleted permanently");
+                    }
                     loadTrash();
                   },
                   icon: const Icon(Icons.delete_forever,

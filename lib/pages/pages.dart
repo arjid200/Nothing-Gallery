@@ -10,3 +10,4 @@ export 'videos_page.dart';
 export 'favorite_page.dart';
 export 'custom_sort_page.dart';
 export 'trash_page.dart';
+export 'locked_page.dart';

@@ -122,6 +122,13 @@ class _ImagePageWidgetState extends State<ImagePageWidget>
               return true;
             },
             child: GestureDetector(
+                onVerticalDragEnd: (details) {
+                  if (details.primaryVelocity != null &&
+                      details.primaryVelocity! < -250 &&
+                      images.isNotEmpty) {
+                    showExifDetailsSheet(context, images[index]);
+                  }
+                },
                 onTap: () => setState(() {
                       decorationVisible = !decorationVisible;
                       toggleStatusBar(decorationVisible);

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'package:nothing_gallery/model/model.dart';
 import 'package:nothing_gallery/util/util.dart';
+import 'package:nothing_gallery/components/exif_details_sheet.dart';
 
 class SingleItemBottomMenu extends StatelessWidget {
   const SingleItemBottomMenu(

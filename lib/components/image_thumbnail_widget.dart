@@ -21,6 +21,8 @@ class ThumbnailWidget extends StatelessWidget {
             child: AssetEntityImage(
               asset,
               isOriginal: isOriginal,
+              thumbnailSize: isOriginal ? null : const ThumbnailSize.square(280),
+              thumbnailFormat: ThumbnailFormat.jpeg,
               fit: BoxFit.cover,
               frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                 if (frame == null) {

@@ -24,6 +24,7 @@ class _VideoPlayerPageWidgetState extends State<VideoPlayerPageWidget> {
   late VideoPlayerController _controller;
   bool decorationVisible = true;
   bool initialized = false;
+  bool isLooping = false;
   late Duration progress;
   Timer? progressBarTimer;
 
@@ -154,14 +155,44 @@ class _VideoPlayerPageWidgetState extends State<VideoPlayerPageWidget> {
                                   icon: const Icon(Icons.arrow_back)),
                               const Spacer(),
                               IconButton(
-                                  onPressed: () {},
-                                  icon: const Icon(Icons.info)),
+                                  onPressed: () {
+                                    setState(() {
+                                      isLooping = !isLooping;
+                                      _controller.setLooping(isLooping);
+                                    });
+                                  },
+                                  icon: Icon(
+                                    isLooping
+                                        ? Icons.repeat_one_rounded
+                                        : Icons.repeat_rounded,
+                                    color: isLooping
+                                        ? Colors.redAccent
+                                        : Colors.white70,
+                                  )),
+                              IconButton(
+                                  onPressed: () {
+                                    showExifDetailsSheet(
+                                        context, widget.video);
+                                  },
+                                  icon: const Icon(Icons.info_outline)),
                             ],
                           ),
                           const Spacer(),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
+                              IconButton(
+                                onPressed: () {
+                                  final newPos = progress -
+                                      const Duration(seconds: 10);
+                                  _controller.seekTo(newPos < Duration.zero
+                                      ? Duration.zero
+                                      : newPos);
+                                },
+                                icon: const Icon(Icons.replay_10_rounded,
+                                    size: 36, color: Colors.white70),
+                              ),
+                              const SizedBox(width: 24),
                               IconButton(
                                   splashColor: Colors.transparent,
                                   highlightColor: Colors.transparent,
@@ -174,10 +205,21 @@ class _VideoPlayerPageWidgetState extends State<VideoPlayerPageWidget> {
                                   },
                                   icon: Icon(
                                     _controller.value.isPlaying
-                                        ? Icons.pause
+                                        ? Icons.pause_circle_filled
                                         : Icons.play_circle_filled_sharp,
-                                    size: 48,
+                                    size: 56,
                                   )),
+                              const SizedBox(width: 24),
+                              IconButton(
+                                onPressed: () {
+                                  final newPos = progress +
+                                      const Duration(seconds: 10);
+                                  final dur = _controller.value.duration;
+                                  _controller.seekTo(newPos > dur ? dur : newPos);
+                                },
+                                icon: const Icon(Icons.forward_10_rounded,
+                                    size: 36, color: Colors.white70),
+                              ),
                             ],
                           ),
                           const Spacer(),

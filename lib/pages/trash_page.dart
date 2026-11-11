@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:nothing_gallery/classes/classes.dart';
+import 'package:nothing_gallery/main.dart';
 import 'package:nothing_gallery/style.dart';
 
 class TrashPage extends StatefulWidget {

@@ -9,3 +9,4 @@ export 'video_player_page.dart';
 export 'videos_page.dart';
 export 'favorite_page.dart';
 export 'custom_sort_page.dart';
+export 'trash_page.dart';

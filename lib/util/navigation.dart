@@ -99,3 +99,11 @@ Future<void> openTrashPage(BuildContext context) async {
         builder: (context) => const TrashPage(),
       ));
 }
+
+Future<void> openLockedPage(BuildContext context) async {
+  await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const LockedPage(),
+      ));
+}

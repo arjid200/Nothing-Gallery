@@ -28,6 +28,8 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
   Map<DateTime, List<AssetEntity>> dateMap = {};
   int totalCount = 0;
   int currentPage = 0;
+  int timelineColCount = 4;
+  String activeFilter = 'ALL';
 
   int startingIndex = 0;
 
@@ -236,8 +238,53 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
                 child: SafeArea(child: child))));
   }
 
-  Widget _buildDateChunk(
-      BuildContext context, MapEntry<DateTime, List<AssetEntity>> entry) {
+  Widget _buildFilterPills(AppStatus appStatus) {
+    final filters = ['ALL', 'PHOTOS', 'VIDEOS', 'SCREENSHOTS', 'FAVORITES'];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        children: filters.map((filter) {
+          final isSelected = activeFilter == filter;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: GestureDetector(
+              onTap: () => setState(() => activeFilter = filter),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? Colors.white
+                      : const Color.fromRGBO(28, 32, 34, 1),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: isSelected ? Colors.white : Colors.white12,
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  filter,
+                  style: mainTextStyle(TextStyleType.buttonText).copyWith(
+                    fontSize: 12,
+                    fontWeight:
+                        isSelected ? FontWeight.bold : FontWeight.normal,
+                    color: isSelected ? Colors.black : Colors.white70,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildDateChunk(BuildContext context,
+      MapEntry<DateTime, List<AssetEntity>> entry, List<AssetEntity> filteredAssets) {
+    if (filteredAssets.isEmpty) return const SizedBox.shrink();
+
     String dateText = entry.key.year == DateTime.now().year
         ? "${monthAbrev[entry.key.month]} ${entry.key.day}"
         : "${entry.key.year} ${monthAbrev[entry.key.month]} ${entry.key.day}";
@@ -258,11 +305,11 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
             crossAxisSpacing: 2,
             mainAxisSpacing: 2,
             shrinkWrap: true,
-            crossAxisCount: 4,
-            children: entry.value.map((entry) {
+            crossAxisCount: timelineColCount,
+            children: filteredAssets.map((asset) {
               return GridItemWidget(
                 context: context,
-                asset: entry,
+                asset: asset,
                 favoritePage: false,
                 thumbnailSelection: false,
               );
@@ -274,20 +321,69 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    var dateList = dateMap.entries.toList();
-    dateList.sort((a, b) => b.key.compareTo(a.key));
 
-    return Consumer<ImageSelection>(builder: (context, imageSelection, child) {
+    return Consumer2<ImageSelection, AppStatus>(
+        builder: (context, imageSelection, appStatus, child) {
+      // Filter assets per date according to active filter
+      var dateList = dateMap.entries.map((entry) {
+        List<AssetEntity> filteredList = entry.value;
+        if (activeFilter == 'PHOTOS') {
+          filteredList = entry.value
+              .where((a) => a.type == AssetType.image)
+              .toList();
+        } else if (activeFilter == 'VIDEOS') {
+          filteredList = entry.value
+              .where((a) => a.type == AssetType.video)
+              .toList();
+        } else if (activeFilter == 'SCREENSHOTS') {
+          filteredList = entry.value
+              .where((a) =>
+                  (a.title ?? '').toLowerCase().contains('screenshot'))
+              .toList();
+        } else if (activeFilter == 'FAVORITES') {
+          filteredList = entry.value
+              .where((a) => appStatus.isFavorite(a.id))
+              .toList();
+        }
+        return MapEntry(entry.key, filteredList);
+      }).where((entry) => entry.value.isNotEmpty).toList();
+
+      dateList.sort((a, b) => b.key.compareTo(a.key));
+
       return picturesPageWrapper(
           imageSelection,
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
                 child: Row(
                   children: [
                     Text(
                       'TIMELINE',
                       style: mainTextStyle(TextStyleType.pageTitle),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(
+                        timelineColCount == 4
+                            ? Icons.grid_view_rounded
+                            : timelineColCount == 3
+                                ? Icons.view_comfy_alt_outlined
+                                : Icons.view_column_outlined,
+                        size: 20,
+                        color: Colors.white70,
+                      ),
+                      tooltip: "Grid columns: $timelineColCount",
+                      onPressed: () {
+                        setState(() {
+                          if (timelineColCount == 4) {
+                            timelineColCount = 3;
+                          } else if (timelineColCount == 3) {
+                            timelineColCount = 2;
+                          } else {
+                            timelineColCount = 4;
+                          }
+                        });
+                      },
                     ),
                     const Spacer(),
                     imageSelection.selectionMode
@@ -299,7 +395,8 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
                         : Container()
                   ],
                 )),
-            // Album Grid
+            _buildFilterPills(appStatus),
+            // Timeline Grid
             Expanded(
                 child: RefreshIndicator(
               color: Colors.red,
@@ -310,7 +407,8 @@ class _PicturesState extends LifecycleListenerState<PicturesWidget>
               child: CustomScrollView(primary: false, slivers: <Widget>[
                 SliverList(
                     delegate: SliverChildBuilderDelegate(
-                  (context, index) => _buildDateChunk(context, dateList[index]),
+                  (context, index) => _buildDateChunk(
+                      context, dateList[index], dateList[index].value),
                   childCount: dateList.length,
                 ))
               ]),

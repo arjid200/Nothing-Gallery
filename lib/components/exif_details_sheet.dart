@@ -26,8 +26,8 @@ void showExifDetailsSheet(BuildContext context, AssetEntity asset) async {
   String formattedDate =
       DateFormat('EEEE, MMM d, yyyy • h:mm a').format(asset.createDateTime);
 
-  final double lat = asset.latitude;
-  final double lng = asset.longitude;
+  final double lat = asset.latitude ?? 0.0;
+  final double lng = asset.longitude ?? 0.0;
   final bool hasGps = lat != 0.0 || lng != 0.0;
 
   if (!context.mounted) return;

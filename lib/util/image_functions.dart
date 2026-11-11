@@ -64,11 +64,9 @@ Future<List<String>> moveCopyFiles(List<AssetEntity> moveEntityList,
 
 Future<List<String>> confirmDelete(
     List<AssetEntity> deleteEntityList, bool useTrash) async {
-  List<File> backups = [];
   if (useTrash) {
     for (var item in deleteEntityList) {
-      File? backup = await moveToTrash(item);
-      if (backup != null) backups.add(backup);
+      await TrashManager.moveToTrash(item);
     }
   }
 
@@ -78,8 +76,13 @@ Future<List<String>> confirmDelete(
       .toList();
 
   if (result.isEmpty) {
-    for (var element in backups) {
-      element.deleteSync();
+    // If the user cancelled system deletion dialog, clean up staged backups
+    final trashed = await TrashManager.getTrashedItems();
+    for (var entity in deleteEntityList) {
+      final matches = trashed.where((t) => t.id == entity.id).toList();
+      for (var m in matches) {
+        await TrashManager.permanentlyDelete(m);
+      }
     }
     return [];
   } else {
@@ -102,25 +105,6 @@ Future<void> shareFiles(List<AssetEntity> images) async {
 }
 
 Future<File?> moveToTrash(AssetEntity entity) async {
-  Directory private = await getApplicationDocumentsDirectory();
-
-  Uint8List? originBytes = await entity.originBytes;
-  File? originFile = await entity.originFile;
-  Directory trashDir = Directory("${private.path}/trash");
-
-  if (!(await trashDir.exists())) {
-    await trashDir.create();
-  }
-
-  if (originFile != null && originBytes != null) {
-    Uint8List imageInUnit8List = originBytes;
-    var lastSeparator = originFile.path.lastIndexOf(Platform.pathSeparator);
-
-    File file = await File(
-            '${trashDir.path}${originFile.path.substring(lastSeparator)}')
-        .create();
-    file.writeAsBytesSync(imageInUnit8List);
-    return file;
-  }
+  await TrashManager.moveToTrash(entity);
   return null;
 }

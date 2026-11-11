@@ -91,7 +91,15 @@ class _AlbumsState extends LifecycleListenerState<AlbumsWidget>
         onTapHandler: () {
           openVideoPage(context);
         },
-      )
+      ),
+      WideIconButton(
+        text: "TRASH",
+        hideIcon: false,
+        iconData: Icons.delete_outline_rounded,
+        onTapHandler: () {
+          openTrashPage(context);
+        },
+      ),
     ];
   }
 

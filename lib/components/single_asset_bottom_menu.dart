@@ -43,6 +43,11 @@ class SingleItemBottomMenu extends StatelessWidget {
               },
               icon: const Icon(Icons.share)),
           IconButton(
+              onPressed: () {
+                showExifDetailsSheet(parentContext, asset);
+              },
+              icon: const Icon(Icons.info_outline_rounded)),
+          IconButton(
               onPressed: () async {
                 confirmDelete([asset], useTrashbin).then((deletedList) {
                   appStatus.removeFavorite(deletedList);
@@ -51,8 +56,40 @@ class SingleItemBottomMenu extends StatelessWidget {
                   }
                 });
               },
-              icon: const Icon(Icons.delete)),
-          IconButton(onPressed: () {}, icon: const Icon(Icons.more_vert)),
+              icon: const Icon(Icons.delete_outline_rounded)),
+          PopupMenuButton<String>(
+            color: const Color.fromRGBO(30, 30, 30, 1),
+            icon: const Icon(Icons.more_vert),
+            onSelected: (val) {
+              if (val == 'details') {
+                showExifDetailsSheet(parentContext, asset);
+              } else if (val == 'share') {
+                shareFiles([asset]);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'details',
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 20, color: Colors.white70),
+                    SizedBox(width: 12),
+                    Text("Details", style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'share',
+                child: Row(
+                  children: [
+                    Icon(Icons.share, size: 20, color: Colors.white70),
+                    SizedBox(width: 12),
+                    Text("Share", style: TextStyle(color: Colors.white)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       );
     });

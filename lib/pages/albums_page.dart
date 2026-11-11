@@ -100,6 +100,14 @@ class _AlbumsState extends LifecycleListenerState<AlbumsWidget>
           openTrashPage(context);
         },
       ),
+      WideIconButton(
+        text: "LOCKED",
+        hideIcon: false,
+        iconData: Icons.lock_outline_rounded,
+        onTapHandler: () {
+          openLockedPage(context);
+        },
+      ),
     ];
   }
 
